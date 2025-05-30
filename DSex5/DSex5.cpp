@@ -170,7 +170,6 @@ namespace {
                     components_.push_back(std::move(component));
                 }
             }
-
             
             std::ranges::sort(components_, [](const Component& a, const Component& b) {
                 if (a.size() != b.size()) return a.size() > b.size();
@@ -194,7 +193,6 @@ namespace {
 
             std::cout << "\n";
         }
-
 
     private:
         void DFS(std::string_view id, const AdjacencyList& graph,
