@@ -3,6 +3,7 @@
 #include <cctype>
 #include <charconv>
 #include <concepts>
+#include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -12,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <print>
+#include <queue>
 #include <ranges>
 #include <stack>
 #include <string_view>
@@ -89,8 +91,8 @@ namespace {
     }
 
     struct Message {
-        std::string sender_id;
-        std::string recipient_id;
+        std::string id1;
+        std::string id2;
         float weight{};
     };
 
@@ -101,7 +103,7 @@ namespace {
             auto operator==(const Edge& other) const { return id == other.id; }
 
             std::string_view id;
-            float weight_{};
+            float weight{};
         };
 
         using VertexType = std::string_view;
@@ -120,7 +122,7 @@ namespace {
                 std::ranges::sort(data_[id1]);
             }
             else {
-                data_.emplace(id1, EdgesType{ {.id = id2, .weight_ = weight} });
+                data_.emplace(id1, EdgesType{ {.id = id2, .weight = weight} });
             }
 
             if (data_.contains(id2)) {
@@ -128,11 +130,21 @@ namespace {
                 std::ranges::sort(data_[id2]);
             }
             else {
-                data_.emplace(id2, EdgesType{ {.id = id1, .weight_ = weight} });
+                data_.emplace(id2, EdgesType{ {.id = id1, .weight = weight} });
             }
         }
         void Clear() { data_.clear(); }
 
+        float edge_weight(const std::string_view from,
+            const std::string_view to) const {
+            for (const auto& vec = data_.at(from); const auto [id, weight] : vec) {
+                if (id == to) {
+                    return weight;
+                }
+            }
+        }
+
+        bool Contains(const std::string_view id) const { return data_.contains(id); }
         bool IsEmpty() const { return data_.empty(); }
         size_t size() const { return data_.size(); }
         size_t nodes() const {
@@ -162,7 +174,7 @@ namespace {
             components_.clear();
             std::unordered_set<std::string_view> visited;
 
-            for (const auto& [id, _] : graph) {
+            for (const auto& id : graph | std::views::keys) {
                 if (!visited.contains(id)) {
                     Component component;
                     DFS(id, graph, visited, component);
@@ -170,7 +182,7 @@ namespace {
                     components_.push_back(std::move(component));
                 }
             }
-            
+
             std::ranges::sort(components_, [](const Component& a, const Component& b) {
                 if (a.size() != b.size()) return a.size() > b.size();
                 return a.front() > b.front();
@@ -178,30 +190,47 @@ namespace {
         }
 
         void PrintResults(std::ostream& out) const {
-            std::cout << "<<< There are " << components_.size() << " connected components in total. >>>\n";
-            out << "<<< There are " << components_.size() << " connected components in total. >>>\n";
-            int index = 1, count = 1;
-            for (const auto& component : components_) {
-                std::cout << std::format("{{{:>2}}} Connected Component: size = {}\n", count++, component.size());
-                out << std::format("{{{:>2}}} Connected Component: size = {}\n", index++, component.size());
-                for (size_t i = 0; i < component.size(); ++i) {
-                    out << " \t(" << std::setw(3) << i + 1 << ") " << component[i];
-                    if ((i + 1) % 8 == 0) out << '\n';
+            std::println("<<< There are {} connected components in total. >>>",
+                components_.size());
+
+            std::println(out, "<<< There are {} connected components in total. >>>",
+                components_.size());
+
+            for (std::size_t count = 1; const auto & component : components_) {
+                std::println("{{{:>2}}} Connected Component: size = {}", count,
+                    component.size());
+
+                std::println(out, "{{{:>2}}} Connected Component: size = {}", count,
+                    component.size());
+                for (std::size_t i = 0; i < component.size(); ++i) {
+                    std::print(out, " \t({:>3}) {}", i + 1, component[i]);
+                    if ((i + 1) % 8 == 0) {
+                        std::println(out);
+                    }
                 }
-                out << '\n';
+                std::println(out);
+                ++count;
             }
 
             std::cout << "\n";
         }
 
+        Component& Find(const std::string_view val) {
+            for (auto& component : components_) {
+                if (std::ranges::contains(component, val)) {
+                    return component;
+                }
+            }
+        }
+
     private:
-        void DFS(std::string_view id, const AdjacencyList& graph,
+        static void DFS(std::string_view id, const AdjacencyList& graph,
             std::unordered_set<std::string_view>& visited,
             Component& component) {
             visited.insert(id);
-            component.push_back(id);
+            component.emplace_back(id);
 
-            for (const auto& [neighbor, _] : graph.at(id)) {
+            for (const auto [neighbor, weight] : graph.at(id)) {
                 if (!visited.contains(neighbor)) {
                     DFS(neighbor, graph, visited, component);
                 }
@@ -210,7 +239,6 @@ namespace {
 
         std::vector<Component> components_;
     };
-
 
     class GraphSystem {
     public:
@@ -223,6 +251,7 @@ namespace {
 
         StatusCode ExecuteCommand(const std::string_view input) {
             if (!IsValidCommand(input)) {
+                std::println("\nCommand does not exist!\n");
                 return StatusCode::kInvalidArgument;
             }
             using enum StatusCode;
@@ -230,8 +259,11 @@ namespace {
             case 0:
                 return kAborted;
             case 1:
-                return BuildGraph();
+                BuildGraph();
+                CalculateConnectedComponents();
+                return kOk;
             case 2:
+                FindShortestPath();
                 return kOk;
             default:
                 std::println("\nCommand does not exist!\n");
@@ -253,9 +285,9 @@ namespace {
             std::vector<Message> relations;
 
             while (in_file.read(reinterpret_cast<char*>(&id_str), sizeof(id_str))) {
-                temp.sender_id = id_str;
+                temp.id1 = id_str;
                 in_file.read(reinterpret_cast<char*>(&id_str), sizeof(id_str));
-                temp.recipient_id = id_str;
+                temp.id2 = id_str;
                 in_file.read(reinterpret_cast<char*>(&temp.weight), sizeof(temp.weight));
 
                 if (temp.weight <= threshold) {
@@ -280,7 +312,7 @@ namespace {
             return *real_number;
         }
 
-        StatusCode BuildGraph() {
+        void BuildGraph() {
             messages_.clear();
             graph_.Clear();
 
@@ -304,38 +336,125 @@ namespace {
                     PrintList(out, nodes);
                 }
                 else {
-                    std::ofstream out{ std::format("pairs{}_{}.adj", file_number, real_number) };
+                    std::ofstream out{
+                        std::format("pairs{}_{}.adj", file_number, real_number) };
                     PrintList(out, nodes);
                 }
             }
 
             file_number_ = file_number;
-            threshold = real_number;
-            CalculateConnectedComponents();
-            return StatusCode::kOk;
+            threshold_ = real_number;
         }
 
-        void CalculateConnectedComponents() const {
+        void CalculateConnectedComponents() {
             if (graph_.IsEmpty()) {
                 std::println("### There is no graph and try it again. ###\n");
                 return;
             }
+            analyzer_.Compute(graph_);
 
-            ConnectedComponentAnalyzer analyzer;
-            analyzer.Compute(graph_);
-
-            if (threshold == 1) {
+            if (threshold_ == 1) {
                 std::ofstream out{ std::format("pairs{}_1..cc", file_number_) };
-                analyzer.PrintResults(out);
+                analyzer_.PrintResults(out);
             }
             else {
-                std::ofstream out{ std::format("pairs{}_{}.cc", file_number_, threshold) };
-                analyzer.PrintResults(out);
+                std::ofstream out{ std::format("pairs{}_{}.cc", file_number_, threshold_) };
+                analyzer_.PrintResults(out);
+            }
+        }
+        
+        static void WritePath(std::ostream& out, std::string_view origin,
+            std::span<const AdjacencyList::Edge> data) {
+            std::println(out, "\norigin: {}", origin);
+            for (std::size_t count = 1; const auto [id, weight] : data) {
+                std::print(out, "({:>2}) \t{}, {}\t", count, id, weight);
+
+                if (count % 8 == 0) {
+                    std::println(out);
+                }
+                ++count;
+            }
+            std::println(out);
+        }
+
+        void FindShortestPath() {
+            if (graph_.IsEmpty()) {
+                std::println("### There is no graph and try it again. ###\n");
+                return;
+            }
+            std::ofstream out{ std::format("pairs{}_{}.ds", file_number_, threshold_),
+                              std::ios::ate };
+            auto id = ReadCorrectId();
+
+            while (true) {
+                if (id.has_value()) {
+                    const auto path = DijkstraShortestPath(*id);
+                    WritePath(out, *id, path);
+                }
+                else {
+                    switch (id.error()) {
+                        using enum StatusCode;
+
+                    case kCancelled:
+                        return;
+                    case kNotFound:
+                        std::println("\n### the student id does not exist! ###\n");
+                    default:
+                        break;
+                    }
+                }
+                id = ReadCorrectId();
             }
 
-            return;
-
+            std::println();
         }
+
+        static constexpr float kInfinite = std::numeric_limits<float>::max();
+
+        std::vector<AdjacencyList::Edge> DijkstraShortestPath(std::string_view start) {
+            using Edge = AdjacencyList::Edge;
+            using Entry = std::pair<float, std::string_view>; // (cost, id)
+
+            std::unordered_map<std::string_view, float> dist;
+            std::unordered_set<std::string_view> visited;
+            std::priority_queue<Entry, std::vector<Entry>, std::greater<>> pq;
+            std::vector<Edge> result;
+
+            // 初始：所有點設為無限大，起點設為0
+            for (auto id : analyzer_.Find(start)) {
+                dist[id] = kInfinite;
+            }
+            dist[start] = 0.0f;
+            pq.emplace(0.0f, start);
+
+            while (!pq.empty()) {
+                auto [cur_cost, cur] = pq.top(); pq.pop();
+                if (visited.contains(cur)) continue;
+                visited.insert(cur);
+
+                // 儲存目前節點與其距離
+                if (cur != start) result.emplace_back(Edge{ .id = cur, .weight = cur_cost });
+
+                for (const auto& [neighbor, weight] : graph_.at(cur)) {
+                    if (!dist.contains(neighbor)) continue; // 不是同一個 component 的
+                    if (visited.contains(neighbor)) continue;
+
+                    float new_cost = cur_cost + weight;
+                    if (new_cost < dist[neighbor]) {
+                        dist[neighbor] = new_cost;
+                        pq.emplace(new_cost, neighbor);
+                    }
+                }
+            }
+
+            // 按距離排序
+            std::ranges::sort(result, [](const Edge& a, const Edge& b) {
+                return a.weight < b.weight;
+                });
+
+            return result;
+        }
+
 
         void PrintList(std::ostream& out, size_t nodes) const {
             std::println(out, "<<< There are {} IDs in total. >>>", graph_.size());
@@ -356,10 +475,31 @@ namespace {
             std::println(out, "<<< There are {} nodes in adjacency lists. >>>", nodes);
         }
 
+        std::expected<std::string, StatusCode> ReadCorrectId() const {
+            using enum StatusCode;
+            PrintAll();
+            auto id = ScanString("\nInput a student ID [0: exit] ");
+            if (id == "0") {
+                return std::unexpected{ kCancelled };
+            }
+            if (!graph_.Contains(id)) {
+                return std::unexpected{ kNotFound };
+            }
+
+            return id;
+        }
+
+        void PrintAll() const {
+            for (const auto& id : graph_ | std::views::keys) {
+                std::print("{:>12}", id);
+            }
+        }
+
+        ConnectedComponentAnalyzer analyzer_;
         std::vector<Message> messages_;
         AdjacencyList graph_;
         std::string file_number_;
-        float threshold = 0.0;
+        float threshold_ = 0.0;
     };
 
 }  // namespace
