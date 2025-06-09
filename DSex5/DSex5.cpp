@@ -1,5 +1,6 @@
 ﻿// by 11227205 資訊二乙 劉至嘉 & 11027214 楊碕萍.
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <charconv>
 #include <concepts>
@@ -7,13 +8,12 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <iomanip>
 #include <ios>
 #include <iostream>
 #include <map>
 #include <optional>
+#include <ostream>
 #include <print>
-#include <queue>
 #include <ranges>
 #include <stack>
 #include <string_view>
@@ -58,9 +58,13 @@ namespace {
     template <typename T>
         requires std::integral<T> || std::floating_point<T>
     constexpr std::optional<T> TryStrTo(std::string_view str) noexcept {
+        if (std::ranges::any_of(str, isalpha)) {
+            return {};
+        }
         T value{};
         const auto [ptr, errc] =
             std::from_chars(str.data(), str.data() + str.size(), value);
+
         if (errc == std::errc{}) {
             return value;
         }
@@ -135,15 +139,6 @@ namespace {
         }
         void Clear() { data_.clear(); }
 
-        float edge_weight(const std::string_view from,
-            const std::string_view to) const {
-            for (const auto& vec = data_.at(from); const auto [id, weight] : vec) {
-                if (id == to) {
-                    return weight;
-                }
-            }
-        }
-
         bool Contains(const std::string_view id) const { return data_.contains(id); }
         bool IsEmpty() const { return data_.empty(); }
         size_t size() const { return data_.size(); }
@@ -189,6 +184,9 @@ namespace {
                 });
         }
 
+        auto begin() { return components_.begin(); }
+        auto end() { return components_.end(); }
+
         void PrintResults(std::ostream& out) const {
             std::println("<<< There are {} connected components in total. >>>",
                 components_.size());
@@ -221,18 +219,40 @@ namespace {
                     return component;
                 }
             }
+            assert(false && "out of range");
+        }
+
+        const Component& Find(const std::string_view val) const {
+            for (const auto& component : components_) {
+                if (std::ranges::contains(component, val)) {
+                    return component;
+                }
+            }
+            assert(false && "out of range");
         }
 
     private:
-        static void DFS(std::string_view id, const AdjacencyList& graph,
+        static void DFS(const std::string_view start_id, const AdjacencyList& graph,
             std::unordered_set<std::string_view>& visited,
             Component& component) {
-            visited.insert(id);
-            component.emplace_back(id);
+            std::stack<std::string_view> stack;
+            stack.push(start_id);
 
-            for (const auto [neighbor, weight] : graph.at(id)) {
-                if (!visited.contains(neighbor)) {
-                    DFS(neighbor, graph, visited, component);
+            while (!stack.empty()) {
+                const auto id = stack.top();
+                stack.pop();
+
+                if (visited.contains(id)) {
+                    continue;
+                }
+
+                visited.insert(id);
+                component.emplace_back(id);
+
+                for (const auto& [neighbor, weight] : graph.at(id)) {
+                    if (!visited.contains(neighbor)) {
+                        stack.push(neighbor);
+                    }
                 }
             }
         }
@@ -246,12 +266,13 @@ namespace {
             "**********  Graph data applications  *********\n"
             "* 1. Build a graph and connected components  *\n"
             "* 2. Find shortest paths by Dijkstra         *\n"
+            "* 3. Generate minimum spanning tree(s)       *\n"
             "**********************************************\n"
-            "Input a choice(0, 1, 2) [0: QUIT]: ";
+            "Input a choice(0, 1, 2, 3) [0: QUIT]: ";
 
         StatusCode ExecuteCommand(const std::string_view input) {
             if (!IsValidCommand(input)) {
-                std::println("\nCommand does not exist!\n");
+                std::println("\nThe command does not exist!\n");
                 return StatusCode::kInvalidArgument;
             }
             using enum StatusCode;
@@ -265,8 +286,11 @@ namespace {
             case 2:
                 FindShortestPath();
                 return kOk;
+            case 3:
+                GenerateMinimumSpanningTree();
+                return kOk;
             default:
-                std::println("\nCommand does not exist!\n");
+                std::println("\nThe command does not exist!\n");
                 return kOutOfRange;
             }
         }
@@ -318,28 +342,34 @@ namespace {
 
             const float real_number = ScanRealNumber();
             const auto file_number = ScanString("\nInput a file number ([0] Quit): ");
+            const auto file_name = std::format("pairs{}.bin", file_number);
 
-            if (const auto file_name = std::format("pairs{}.bin", file_number);
-                std::filesystem::exists(file_name) && file_number != "0") {
-                messages_ = ReadRelations(file_name, real_number);
-                for (const auto& message : messages_) {
-                    graph_.Insert(message);
-                }
-                const auto nodes = graph_.nodes();
-                std::println(
-                    "\n<<< There are {} IDs in total. >>>\n\n<<< There are {} nodes in "
-                    "adjacency lists. >>>\n",
-                    graph_.size(), nodes);
+            if (file_number == "0") {
+                return;
+            }
+            if (!std::filesystem::exists(file_name)) {
+                std::println("\n### {} does not exist! ###", file_name);
+                return;
+            }
 
-                if (real_number == 1) {
-                    std::ofstream out{ std::format("pairs{}_1..adj", file_number) };
-                    PrintList(out, nodes);
-                }
-                else {
-                    std::ofstream out{
-                        std::format("pairs{}_{}.adj", file_number, real_number) };
-                    PrintList(out, nodes);
-                }
+            messages_ = ReadRelations(file_name, real_number);
+            for (const auto& message : messages_) {
+                graph_.Insert(message);
+            }
+            const auto nodes = graph_.nodes();
+            std::println(
+                "\n<<< There are {} IDs in total. >>>\n\n<<< There are {} nodes in "
+                "adjacency lists. >>>\n",
+                graph_.size(), nodes);
+
+            if (real_number == 1) {
+                std::ofstream out{ std::format("pairs{}_1..adj", file_number) };
+                PrintList(out, nodes);
+            }
+            else {
+                std::ofstream out{
+                    std::format("pairs{}_{}.adj", file_number, real_number) };
+                PrintList(out, nodes);
             }
 
             file_number_ = file_number;
@@ -362,12 +392,12 @@ namespace {
                 analyzer_.PrintResults(out);
             }
         }
-        
+
         static void WritePath(std::ostream& out, std::string_view origin,
             std::span<const AdjacencyList::Edge> data) {
             std::println(out, "\norigin: {}", origin);
             for (std::size_t count = 1; const auto [id, weight] : data) {
-                std::print(out, "({:>2}) \t{}, {}\t", count, id, weight);
+                std::print(out, "({:>2}) \t{}, {:.4}\t", count, id, weight);
 
                 if (count % 8 == 0) {
                     std::println(out);
@@ -379,82 +409,84 @@ namespace {
 
         void FindShortestPath() {
             if (graph_.IsEmpty()) {
-                std::println("### There is no graph and try it again. ###\n");
+                std::println("### There is no graph and choose 1 first. ###\n");
                 return;
             }
             std::ofstream out{ std::format("pairs{}_{}.ds", file_number_, threshold_),
-                              std::ios::ate };
-            auto id = ReadCorrectId();
+                              std::ios::app };
 
+            auto id = ReadCorrectId();
             while (true) {
                 if (id.has_value()) {
                     const auto path = DijkstraShortestPath(*id);
                     WritePath(out, *id, path);
                 }
                 else {
+                    using enum StatusCode;
                     switch (id.error()) {
-                        using enum StatusCode;
-
                     case kCancelled:
+                        std::println();
                         return;
                     case kNotFound:
-                        std::println("\n### the student id does not exist! ###\n");
+                        std::println("\n### the student id does not exist! ###");
+                        break;
                     default:
                         break;
                     }
                 }
                 id = ReadCorrectId();
             }
-
-            std::println();
         }
 
         static constexpr float kInfinite = std::numeric_limits<float>::max();
 
-        std::vector<AdjacencyList::Edge> DijkstraShortestPath(std::string_view start) {
-            using Edge = AdjacencyList::Edge;
-            using Entry = std::pair<float, std::string_view>; // (cost, id)
-
-            std::unordered_map<std::string_view, float> dist;
-            std::unordered_set<std::string_view> visited;
-            std::priority_queue<Entry, std::vector<Entry>, std::greater<>> pq;
-            std::vector<Edge> result;
-
-            // 初始：所有點設為無限大，起點設為0
-            for (auto id : analyzer_.Find(start)) {
-                dist[id] = kInfinite;
-            }
-            dist[start] = 0.0f;
-            pq.emplace(0.0f, start);
-
-            while (!pq.empty()) {
-                auto [cur_cost, cur] = pq.top(); pq.pop();
-                if (visited.contains(cur)) continue;
-                visited.insert(cur);
-
-                // 儲存目前節點與其距離
-                if (cur != start) result.emplace_back(Edge{ .id = cur, .weight = cur_cost });
-
-                for (const auto& [neighbor, weight] : graph_.at(cur)) {
-                    if (!dist.contains(neighbor)) continue; // 不是同一個 component 的
-                    if (visited.contains(neighbor)) continue;
-
-                    float new_cost = cur_cost + weight;
-                    if (new_cost < dist[neighbor]) {
-                        dist[neighbor] = new_cost;
-                        pq.emplace(new_cost, neighbor);
-                    }
+        std::vector<AdjacencyList::Edge> DijkstraShortestPath(
+            std::string_view starting_vertex) {
+            std::unordered_map<std::string_view, float> available_vertices;
+            auto construct_available_vertices =
+                [&available_vertices, this](const std::string_view starting_vertex) {
+                const auto& component = analyzer_.Find(starting_vertex);
+                available_vertices.reserve(component.size());
+                for (const auto key : component) {
+                    available_vertices[key] = kInfinite;
                 }
+                };
+            construct_available_vertices(starting_vertex);
+
+            std::vector<AdjacencyList::Edge> path;
+            path.reserve(available_vertices.size());
+
+            auto update_available = [&available_vertices, this](
+                const std::string_view current,
+                const float cost) {
+                    for (const auto [id, weight] : graph_.at(current)) {
+                        if (available_vertices.contains(id) &&
+                            available_vertices.at(id) > weight + cost) {
+                            available_vertices[id] = weight + cost;
+                        }
+                    }
+                };
+
+            for (float cost = 0.0; available_vertices.size() > 1;) {
+                available_vertices.erase(starting_vertex);
+
+                update_available(starting_vertex, cost);
+
+                auto pair_lesser_than =
+                    [](const std::pair<std::string_view, float>& lhs,
+                        const std::pair<std::string_view, float>& rhs) {
+                            return (lhs.second < rhs.second);
+                    };
+                const auto min =
+                    std::ranges::min_element(available_vertices, pair_lesser_than);
+
+                starting_vertex = min->first;
+                cost = min->second;
+                path.emplace_back(starting_vertex, min->second);
             }
 
-            // 按距離排序
-            std::ranges::sort(result, [](const Edge& a, const Edge& b) {
-                return a.weight < b.weight;
-                });
-
-            return result;
+            return path;
         }
-
 
         void PrintList(std::ostream& out, size_t nodes) const {
             std::println(out, "<<< There are {} IDs in total. >>>", graph_.size());
@@ -485,14 +517,77 @@ namespace {
             if (!graph_.Contains(id)) {
                 return std::unexpected{ kNotFound };
             }
-
+            std::println();
             return id;
         }
 
         void PrintAll() const {
-            for (const auto& id : graph_ | std::views::keys) {
+            std::println();
+            for (std::size_t count = 1; const auto & id : graph_ | std::views::keys) {
                 std::print("{:>12}", id);
+                ++count;
             }
+        }
+
+        void GenerateMinimumSpanningTree() {
+            if (graph_.IsEmpty()) {
+                std::println("### There is no graph and choose 1 first. ###\n");
+                return;
+            }
+            for (std::size_t count = 1; const auto cost : PrimsAlgorithm()) {
+                std::println("The MST cost of connected component {{{:>2}}} = {:.2f}",
+                    count, cost);
+                ++count;
+            }
+            std::println();
+        }
+
+        std::vector<float> PrimsAlgorithm() {
+            std::unordered_map<std::string_view, float> available_vertices;
+            auto construct_available_vertices =
+                [&available_vertices,
+                this](const std::vector<std::string_view>& component) {
+                available_vertices.reserve(component.size());
+                for (const auto key : component) {
+                    available_vertices[key] = kInfinite;
+                }
+                };
+            auto update_available = [&available_vertices,
+                this](const std::string_view current) {
+                for (const auto [id, weight] : graph_.at(current)) {
+                    if (available_vertices.contains(id) &&
+                        weight < available_vertices.at(id)) {
+                        available_vertices[id] = weight;
+                    }
+                }
+                };
+
+            std::vector<float> results;
+            for (const auto& component : analyzer_) {
+                available_vertices.clear();
+                construct_available_vertices(component);
+
+                float cost = 0.0;
+                auto starting_vertex = component[0];
+
+                while (available_vertices.size() > 1) {
+                    available_vertices.erase(starting_vertex);
+                    update_available(starting_vertex);
+
+                    auto pair_lesser_than =
+                        [](const std::pair<std::string_view, float>& lhs,
+                            const std::pair<std::string_view, float>& rhs) {
+                                return (lhs.second < rhs.second);
+                        };
+                    const auto min =
+                        std::ranges::min_element(available_vertices, pair_lesser_than);
+
+                    cost += min->second;
+                    starting_vertex = min->first;
+                }
+                results.push_back(cost);
+            }
+            return results;
         }
 
         ConnectedComponentAnalyzer analyzer_;
